@@ -3,7 +3,11 @@ use std::sync::{
     Arc,
 };
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use oboe::{
+    AudioOutputCallback, AudioOutputStreamSafe, AudioStream, AudioStreamAsync, AudioStreamBase,
+    AudioStreamBuilder, DataCallbackResult, Error, Output, PerformanceMode, SharingMode, Stereo,
+    Usage,
+};
 use ringbuf::{
     traits::{Consumer, Producer, Split},
     HeapRb,
@@ -18,47 +22,64 @@ use crate::{
     player::PLAY_QUEUE_CAPACITY,
 };
 
-struct CallbackState {
+struct OboeCallback {
     consumer: ringbuf::HeapCons<SfxHandle>,
     mixer: Mixer,
     atlas: SoundAtlas,
-    pending_handles: [SfxHandle; PLAY_QUEUE_CAPACITY],
-    channels: usize,
+    device_lost: Arc<AtomicBool>,
 }
 
-impl CallbackState {
-    fn new(consumer: ringbuf::HeapCons<SfxHandle>, atlas: SoundAtlas, channels: usize) -> Self {
+impl OboeCallback {
+    fn new(
+        consumer: ringbuf::HeapCons<SfxHandle>,
+        atlas: SoundAtlas,
+        device_lost: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             consumer,
             mixer: Mixer::new(),
             atlas,
-            pending_handles: [SfxHandle::default(); PLAY_QUEUE_CAPACITY],
-            channels,
+            device_lost,
         }
     }
+}
 
-    #[inline(always)]
-    fn mix_into(&mut self, data: &mut [f32]) {
-        loop {
-            let queued = self.consumer.pop_slice(&mut self.pending_handles);
-            if queued == 0 {
-                break;
-            }
+impl AudioOutputCallback for OboeCallback {
+    type FrameType = (f32, Stereo);
 
-            for &handle in &self.pending_handles[..queued] {
-                let clip = unsafe { self.atlas.clip_unchecked(handle) };
-                let _ = self.mixer.add_sound(clip);
-            }
+    fn on_audio_ready(
+        &mut self,
+        _stream: &mut dyn AudioOutputStreamSafe,
+        data: &mut [(f32, f32)],
+    ) -> DataCallbackResult {
+        let data = unsafe {
+            std::slice::from_raw_parts_mut(data.as_mut_ptr() as *mut f32, data.len() * 2)
+        };
+
+        data.fill(0.0);
+
+        while let Some(handle) = self.consumer.try_pop() {
+            let clip = unsafe { self.atlas.clip_unchecked(handle) };
+            let _ = self.mixer.add_sound(clip);
         }
 
-        self.mixer.mix(self.channels, data);
+        self.mixer.mix(2, data);
+        DataCallbackResult::Continue
+    }
+
+    fn on_error_before_close(
+        &mut self,
+        _audio_stream: &mut dyn AudioOutputStreamSafe,
+        _error: Error,
+    ) {
+        self.device_lost.store(true, Ordering::Release);
     }
 }
 
 pub struct Player {
     producer: ringbuf::HeapProd<SfxHandle>,
     consumer: Option<ringbuf::HeapCons<SfxHandle>>,
-    stream: Option<cpal::Stream>,
+    stream: Option<AudioStreamAsync<Output, OboeCallback>>,
     device_sample_rate: u32,
     cached_sources: Option<Vec<RawSource>>,
     device_lost: Arc<AtomicBool>,
@@ -93,7 +114,9 @@ impl Player {
     }
 
     fn drop_stream(&mut self) {
-        self.stream = None;
+        if let Some(mut stream) = self.stream.take() {
+            let _ = stream.stop();
+        }
     }
 
     fn load_sources(&mut self, sources: Vec<RawSource>) -> Option<Vec<SfxHandle>> {
@@ -130,13 +153,6 @@ impl AudioBackend for Player {
         }
     }
 
-    fn shutdown(&mut self) {
-        self.drop_stream();
-        self.reset_queue();
-        self.cached_sources = None;
-        self.device_lost.store(false, Ordering::Release);
-    }
-
     fn build_stream(&mut self) -> anyhow::Result<()> {
         if self.cached_sources.is_none() {
             return Ok(());
@@ -145,15 +161,15 @@ impl AudioBackend for Player {
         self.drop_stream();
         self.reset_queue();
 
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| anyhow::anyhow!("No output device"))?;
-        let supported_config = device.default_output_config()?;
-        self.device_sample_rate = supported_config.sample_rate();
-        let config = supported_config.config();
-
-        let channels = config.channels as usize;
+        let probe_stream = AudioStreamBuilder::default()
+            .set_performance_mode(PerformanceMode::LowLatency)
+            .set_sharing_mode(SharingMode::Exclusive)
+            .set_usage(Usage::Game)
+            .set_channel_count::<Stereo>()
+            .set_format::<f32>()
+            .open_stream()?;
+        self.device_sample_rate = probe_stream.get_sample_rate() as u32;
+        drop(probe_stream);
 
         let consumer = self
             .consumer
@@ -166,23 +182,20 @@ impl AudioBackend for Player {
                 .ok_or_else(|| anyhow::anyhow!("Missing cached sources"))?;
             SoundAtlas::build_from_sources(sources, self.device_sample_rate)
         };
-        let mut callback_state = CallbackState::new(consumer, atlas, channels);
+        let callback = OboeCallback::new(consumer, atlas, Arc::clone(&self.device_lost));
 
-        let device_lost_trigger = Arc::clone(&self.device_lost);
-        device_lost_trigger.store(false, Ordering::Release);
+        self.device_lost.store(false, Ordering::Release);
 
-        let stream = device.build_output_stream(
-            &config,
-            move |data: &mut [f32], _| {
-                callback_state.mix_into(data);
-            },
-            move |_| {
-                device_lost_trigger.store(true, Ordering::Release);
-            },
-            None,
-        )?;
+        let mut stream = AudioStreamBuilder::default()
+            .set_performance_mode(PerformanceMode::LowLatency)
+            .set_sharing_mode(SharingMode::Exclusive)
+            .set_usage(Usage::Game)
+            .set_channel_count::<Stereo>()
+            .set_format::<f32>()
+            .set_callback(callback)
+            .open_stream()?;
 
-        stream.play()?;
+        stream.start()?;
         self.stream = Some(stream);
         Ok(())
     }

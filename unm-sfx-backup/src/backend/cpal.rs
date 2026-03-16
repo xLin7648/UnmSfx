@@ -22,7 +22,6 @@ struct CallbackState {
     consumer: ringbuf::HeapCons<SfxHandle>,
     mixer: Mixer,
     atlas: SoundAtlas,
-    pending_handles: [SfxHandle; PLAY_QUEUE_CAPACITY],
     channels: usize,
 }
 
@@ -32,23 +31,17 @@ impl CallbackState {
             consumer,
             mixer: Mixer::new(),
             atlas,
-            pending_handles: [SfxHandle::default(); PLAY_QUEUE_CAPACITY],
             channels,
         }
     }
 
     #[inline(always)]
     fn mix_into(&mut self, data: &mut [f32]) {
-        loop {
-            let queued = self.consumer.pop_slice(&mut self.pending_handles);
-            if queued == 0 {
-                break;
-            }
+        data.fill(0.0);
 
-            for &handle in &self.pending_handles[..queued] {
-                let clip = unsafe { self.atlas.clip_unchecked(handle) };
-                let _ = self.mixer.add_sound(clip);
-            }
+        while let Some(handle) = self.consumer.try_pop() {
+            let clip = unsafe { self.atlas.clip_unchecked(handle) };
+            let _ = self.mixer.add_sound(clip);
         }
 
         self.mixer.mix(self.channels, data);
@@ -130,13 +123,6 @@ impl AudioBackend for Player {
         }
     }
 
-    fn shutdown(&mut self) {
-        self.drop_stream();
-        self.reset_queue();
-        self.cached_sources = None;
-        self.device_lost.store(false, Ordering::Release);
-    }
-
     fn build_stream(&mut self) -> anyhow::Result<()> {
         if self.cached_sources.is_none() {
             return Ok(());
@@ -151,7 +137,7 @@ impl AudioBackend for Player {
             .ok_or_else(|| anyhow::anyhow!("No output device"))?;
         let supported_config = device.default_output_config()?;
         self.device_sample_rate = supported_config.sample_rate();
-        let config = supported_config.config();
+        let config: cpal::StreamConfig = supported_config.into();
 
         let channels = config.channels as usize;
 

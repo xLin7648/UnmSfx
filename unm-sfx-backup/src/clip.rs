@@ -33,7 +33,6 @@ unsafe impl Sync for SfxHandle {}
 pub(crate) struct ClipMap {
     pub data_ptr: *const f32,
     pub frames_count: usize,
-    pub channel_count: usize,
 }
 
 unsafe impl Send for ClipMap {}

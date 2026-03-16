@@ -12,8 +12,6 @@ pub trait AudioBackend {
 
     fn maintain_stream(&mut self);
 
-    fn shutdown(&mut self);
-
     fn init_load_sound(&mut self, datas: Vec<Vec<u8>>) -> Option<Vec<SfxHandle>>;
 
     fn init_load_sound_from_sources(&mut self, sources: Vec<RawSource>) -> Option<Vec<SfxHandle>>;

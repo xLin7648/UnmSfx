@@ -25,10 +25,6 @@ impl SfxManager {
         self.0.maintain_stream()
     }
 
-    pub fn shutdown(&mut self) {
-        self.0.shutdown()
-    }
-
     pub fn init_load_sound(&mut self, datas: Vec<Vec<u8>>) -> Option<Vec<SfxHandle>> {
         if datas.len() > MAX_SOUND_COUNT {
             return None;

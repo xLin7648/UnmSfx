@@ -1,18 +1,83 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading;
 using UnityEngine;
+#if UNITY_EDITOR
+using UnityEditor;
+using UnityEditor.PackageManager;
+#endif
 
 namespace UnmSfx
 {
     internal static class UnmSfxBridge
     {
 #if UNITY_IOS && !UNITY_EDITOR
-    private const string LibName = "__Internal";
+        private const string LibName = "__Internal";
+#elif UNITY_EDITOR_WIN
+        private const string WindowsLibFileName = "unm_sfx.dll";
+        private const string WindowsTempDirectoryName = "UnmSfxNative";
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void InitDelegate();
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void TickDelegate();
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void ShutdownDelegate();
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void PlayDelegate(byte handle);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int LoadSoundDelegate(
+            IntPtr[] dataPtrs,
+            UIntPtr[] dataLens,
+            UIntPtr count,
+            byte[] outHandles
+        );
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int LoadPcmF32Delegate(
+            IntPtr[] dataPtrs,
+            uint[] frameCounts,
+            uint[] channelCounts,
+            uint[] sampleRates,
+            UIntPtr count,
+            byte[] outHandles
+        );
+
+        private sealed class NativeApi
+        {
+            public IntPtr ModuleHandle;
+            public string LoadedPath;
+            public InitDelegate Init;
+            public TickDelegate Tick;
+            public ShutdownDelegate Shutdown;
+            public PlayDelegate Play;
+            public LoadSoundDelegate LoadSound;
+            public LoadPcmF32Delegate LoadPcmF32;
+        }
+
+        [DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr LoadLibraryW(string fileName);
+
+        [DllImport("kernel32", CharSet = CharSet.Ansi, SetLastError = true)]
+        private static extern IntPtr GetProcAddress(IntPtr module, string procName);
+
+        [DllImport("kernel32", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool FreeLibrary(IntPtr module);
+
+        private static NativeApi s_api;
 #else
         private const string LibName = "unm_sfx";
 #endif
 
+#if !UNITY_EDITOR_WIN
         [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
         private static extern void unm_sfx_init();
 
@@ -42,27 +107,312 @@ namespace UnmSfx
             UIntPtr count,
             byte[] outHandles
         );
+#endif
+
+#if UNITY_EDITOR_WIN
+        static UnmSfxBridge()
+        {
+            AssemblyReloadEvents.beforeAssemblyReload += ShutdownBeforeReload;
+            EditorApplication.quitting += ShutdownBeforeReload;
+        }
+#endif
+
+#if UNITY_EDITOR_WIN
+        private static NativeApi GetApiOrNull()
+        {
+            return s_api;
+        }
+
+        private static NativeApi EnsureApi()
+        {
+            if (s_api != null)
+            {
+                return s_api;
+            }
+
+            string sourcePath = ResolveWindowsSourcePath();
+            if (!File.Exists(sourcePath))
+            {
+                throw new DllNotFoundException($"[UNM SFX] Native library not found at '{sourcePath}'.");
+            }
+
+            string loadedPath = CreateLoadedCopy(sourcePath);
+            IntPtr module = LoadLibraryW(loadedPath);
+            if (module == IntPtr.Zero)
+            {
+                int error = Marshal.GetLastWin32Error();
+                TryDeleteFile(loadedPath);
+                throw new DllNotFoundException(
+                    $"[UNM SFX] Failed to load native library copy '{loadedPath}' (Win32 error {error})."
+                );
+            }
+
+            try
+            {
+                s_api = new NativeApi
+                {
+                    ModuleHandle = module,
+                    LoadedPath = loadedPath,
+                    Init = LoadFunction<InitDelegate>(module, "unm_sfx_init"),
+                    Tick = LoadFunction<TickDelegate>(module, "unm_sfx_tick"),
+                    Shutdown = LoadFunction<ShutdownDelegate>(module, "unm_sfx_shutdown"),
+                    Play = LoadFunction<PlayDelegate>(module, "unm_sfx_play"),
+                    LoadSound = LoadFunction<LoadSoundDelegate>(module, "unm_sfx_load_sound"),
+                    LoadPcmF32 = LoadFunction<LoadPcmF32Delegate>(module, "unm_sfx_load_pcm_f32"),
+                };
+
+                return s_api;
+            }
+            catch
+            {
+                FreeLibrary(module);
+                TryDeleteFile(loadedPath);
+                throw;
+            }
+        }
+
+        private static T LoadFunction<T>(IntPtr module, string name) where T : Delegate
+        {
+            IntPtr address = GetProcAddress(module, name);
+            if (address == IntPtr.Zero)
+            {
+                throw new EntryPointNotFoundException(
+                    $"[UNM SFX] Entry point '{name}' was not found in '{WindowsLibFileName}'."
+                );
+            }
+
+            return Marshal.GetDelegateForFunctionPointer<T>(address);
+        }
+
+        private static string ResolveWindowsSourcePath()
+        {
+            string archFolder = IntPtr.Size == 8 ? "x86_64" : "x86";
+
+#if UNITY_EDITOR
+            var packageInfo = UnityEditor.PackageManager.PackageInfo.FindForAssembly(Assembly.GetExecutingAssembly());
+            if (packageInfo != null && !string.IsNullOrEmpty(packageInfo.resolvedPath))
+            {
+                return Path.Combine(packageInfo.resolvedPath, "Runtime", "bin", archFolder, WindowsLibFileName);
+            }
+
+            string projectRoot = Directory.GetParent(Application.dataPath)?.FullName ?? string.Empty;
+            if (!string.IsNullOrEmpty(projectRoot))
+            {
+                return Path.Combine(
+                    projectRoot,
+                    "Packages",
+                    "com.xlin.unmsfx",
+                    "Runtime",
+                    "bin",
+                    archFolder,
+                    WindowsLibFileName
+                );
+            }
+#endif
+
+            return Path.Combine(Application.dataPath, "Plugins", archFolder, WindowsLibFileName);
+        }
+
+        private static string CreateLoadedCopy(string sourcePath)
+        {
+            string tempDirectory = Path.Combine(Path.GetTempPath(), WindowsTempDirectoryName, "Windows");
+            Directory.CreateDirectory(tempDirectory);
+            CleanupStaleCopies(tempDirectory);
+
+            string loadedPath = Path.Combine(tempDirectory, $"unm_sfx_{Guid.NewGuid():N}.dll");
+            File.Copy(sourcePath, loadedPath, false);
+            return loadedPath;
+        }
+
+        private static void CleanupStaleCopies(string directory)
+        {
+            foreach (string path in Directory.GetFiles(directory, "unm_sfx_*.dll"))
+            {
+                try
+                {
+                    var age = DateTime.UtcNow - File.GetLastWriteTimeUtc(path);
+                    if (age.TotalHours >= 1.0)
+                    {
+                        File.Delete(path);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private static void UnloadApi()
+        {
+            NativeApi api = s_api;
+            s_api = null;
+            if (api == null)
+            {
+                return;
+            }
+
+            if (api.ModuleHandle != IntPtr.Zero && !FreeLibrary(api.ModuleHandle))
+            {
+                Debug.LogWarning(
+                    $"[UNM SFX] FreeLibrary failed for '{api.LoadedPath}' (Win32 error {Marshal.GetLastWin32Error()})."
+                );
+            }
+
+            TryDeleteFile(api.LoadedPath);
+        }
+
+        private static void TryDeleteFile(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                return;
+            }
+
+            for (int attempt = 0; attempt < 8; attempt++)
+            {
+                try
+                {
+                    File.Delete(path);
+                    return;
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+
+                Thread.Sleep(25);
+            }
+        }
+
+#if UNITY_EDITOR_WIN
+        private static void ShutdownBeforeReload()
+        {
+            Shutdown();
+        }
+#endif
+#endif
+
+        private static void NativeInit()
+        {
+#if UNITY_EDITOR_WIN
+            EnsureApi().Init();
+#else
+            unm_sfx_init();
+#endif
+        }
+
+        private static void NativeTick()
+        {
+#if UNITY_EDITOR_WIN
+            NativeApi api = GetApiOrNull();
+            if (api != null)
+            {
+                api.Tick();
+            }
+#else
+            unm_sfx_tick();
+#endif
+        }
+
+        private static void NativeShutdown()
+        {
+#if UNITY_EDITOR_WIN
+            NativeApi api = GetApiOrNull();
+            if (api == null)
+            {
+                return;
+            }
+
+            try
+            {
+                api.Shutdown();
+            }
+            finally
+            {
+                UnloadApi();
+            }
+#else
+            unm_sfx_shutdown();
+#endif
+        }
+
+        private static void NativePlay(byte handle)
+        {
+#if UNITY_EDITOR_WIN
+            NativeApi api = GetApiOrNull();
+            if (api != null)
+            {
+                api.Play(handle);
+            }
+#else
+            unm_sfx_play(handle);
+#endif
+        }
+
+        private static int NativeLoadSound(
+            IntPtr[] dataPtrs,
+            UIntPtr[] dataLens,
+            UIntPtr count,
+            byte[] outHandles
+        )
+        {
+#if UNITY_EDITOR_WIN
+            NativeApi api = GetApiOrNull();
+            if (api == null)
+            {
+                return -1;
+            }
+
+            return api.LoadSound(dataPtrs, dataLens, count, outHandles);
+#else
+            return unm_sfx_load_sound(dataPtrs, dataLens, count, outHandles);
+#endif
+        }
+
+        private static int NativeLoadPcmF32(
+            IntPtr[] dataPtrs,
+            uint[] frameCounts,
+            uint[] channelCounts,
+            uint[] sampleRates,
+            UIntPtr count,
+            byte[] outHandles
+        )
+        {
+#if UNITY_EDITOR_WIN
+            NativeApi api = GetApiOrNull();
+            if (api == null)
+            {
+                return -1;
+            }
+
+            return api.LoadPcmF32(dataPtrs, frameCounts, channelCounts, sampleRates, count, outHandles);
+#else
+            return unm_sfx_load_pcm_f32(dataPtrs, frameCounts, channelCounts, sampleRates, count, outHandles);
+#endif
+        }
 
         public static void Init()
         {
-            unm_sfx_init();
+            NativeInit();
         }
 
         public static void Tick()
         {
-            unm_sfx_tick();
+            NativeTick();
         }
 
         public static void Shutdown()
         {
-            unm_sfx_shutdown();
+            NativeShutdown();
         }
 
         public static void Play(SfxHandle handle)
         {
             if (handle.IsValid)
             {
-                unm_sfx_play(handle.Raw);
+                NativePlay(handle.Raw);
             }
         }
 
@@ -95,7 +445,7 @@ namespace UnmSfx
                     lens[i] = (UIntPtr)clipData.Length;
                 }
 
-                int result = unm_sfx_load_sound(ptrs, lens, (UIntPtr)count, outHandles);
+                int result = NativeLoadSound(ptrs, lens, (UIntPtr)count, outHandles);
                 if (result != 0)
                 {
                     Debug.LogError($"[UNM SFX] LoadSounds failed with error code {result}.");
@@ -178,7 +528,7 @@ namespace UnmSfx
                     sampleRates[i] = (uint)clip.frequency;
                 }
 
-                int result = unm_sfx_load_pcm_f32(
+                int result = NativeLoadPcmF32(
                     ptrs,
                     frameCounts,
                     channelCounts,

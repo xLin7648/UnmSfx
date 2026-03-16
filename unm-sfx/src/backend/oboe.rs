@@ -26,6 +26,7 @@ struct OboeCallback {
     consumer: ringbuf::HeapCons<SfxHandle>,
     mixer: Mixer,
     atlas: SoundAtlas,
+    pending_handles: [SfxHandle; PLAY_QUEUE_CAPACITY],
     device_lost: Arc<AtomicBool>,
 }
 
@@ -39,6 +40,7 @@ impl OboeCallback {
             consumer,
             mixer: Mixer::new(),
             atlas,
+            pending_handles: [SfxHandle::default(); PLAY_QUEUE_CAPACITY],
             device_lost,
         }
     }
@@ -56,11 +58,16 @@ impl AudioOutputCallback for OboeCallback {
             std::slice::from_raw_parts_mut(data.as_mut_ptr() as *mut f32, data.len() * 2)
         };
 
-        data.fill(0.0);
+        loop {
+            let queued = self.consumer.pop_slice(&mut self.pending_handles);
+            if queued == 0 {
+                break;
+            }
 
-        while let Some(handle) = self.consumer.try_pop() {
-            let clip = unsafe { self.atlas.clip_unchecked(handle) };
-            let _ = self.mixer.add_sound(clip);
+            for &handle in &self.pending_handles[..queued] {
+                let clip = unsafe { self.atlas.clip_unchecked(handle) };
+                let _ = self.mixer.add_sound(clip);
+            }
         }
 
         self.mixer.mix(2, data);
@@ -153,6 +160,13 @@ impl AudioBackend for Player {
         }
     }
 
+    fn shutdown(&mut self) {
+        self.drop_stream();
+        self.reset_queue();
+        self.cached_sources = None;
+        self.device_lost.store(false, Ordering::Release);
+    }
+
     fn build_stream(&mut self) -> anyhow::Result<()> {
         if self.cached_sources.is_none() {
             return Ok(());
@@ -182,7 +196,11 @@ impl AudioBackend for Player {
                 .ok_or_else(|| anyhow::anyhow!("Missing cached sources"))?;
             SoundAtlas::build_from_sources(sources, self.device_sample_rate)
         };
-        let callback = OboeCallback::new(consumer, atlas, Arc::clone(&self.device_lost));
+        let callback = OboeCallback::new(
+            consumer,
+            atlas,
+            Arc::clone(&self.device_lost),
+        );
 
         self.device_lost.store(false, Ordering::Release);
 

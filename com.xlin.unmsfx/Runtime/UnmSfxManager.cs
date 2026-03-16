@@ -8,7 +8,7 @@ namespace UnmSfx
     [DefaultExecutionOrder(-10000)]
     public sealed class UnmSfxManager : MonoBehaviour
     {
-        public static UnmSfxManager Instance
+        public static UnmSfxManager Ins
         {
             get
             {

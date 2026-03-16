@@ -47,5 +47,4 @@ namespace UnmSfx
             return IsValid ? $"SfxHandle({Raw})" : "InvalidHandle";
         }
     }
-
 }

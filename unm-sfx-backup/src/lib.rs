@@ -195,10 +195,7 @@ pub extern "C" fn unm_sfx_play(handle: u8) {
 #[no_mangle]
 pub extern "C" fn unm_sfx_shutdown() {
     unsafe {
-        let manager = manager_mut();
-        if let Some(mut manager) = manager.take() {
-            manager.shutdown();
-        }
+        *manager_mut() = None;
     }
 }
 
