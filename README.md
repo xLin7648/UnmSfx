@@ -8,7 +8,7 @@ core and a Unity UPM package.
 
 ## Repository Layout
 
-- `unm-sfx/`: Rust source code, public C header, and build notes for the
+- `unm-sfx/`: Rust source code, build notes for the
   native runtime.
 - `com.xlin.unmsfx/`: Unity package that wraps the native runtime and ships the
   prebuilt binaries used by Unity projects.
