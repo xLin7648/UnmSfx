@@ -1,0 +1,48 @@
+This repository contains third-party software components governed by the
+license(s) indicated below.
+
+Component Name: Anyhow
+Version Number: 1.0.101
+License Type: "MIT OR Apache-2.0"
+Provide License Details:
+- Source repository: https://github.com/dtolnay/anyhow
+- Apache-2.0 license text: https://github.com/dtolnay/anyhow/blob/master/LICENSE-APACHE
+- MIT license text: https://github.com/dtolnay/anyhow/blob/master/LICENSE-MIT
+- Used by: rust_sfx_core
+
+Component Name: Symphonia
+Version Number: 0.5.5
+License Type: "MPL-2.0"
+Provide License Details:
+- Source repository: https://github.com/pdeljanov/Symphonia
+- License text: https://github.com/pdeljanov/Symphonia/blob/master/LICENSE
+- Used by: rust_sfx_core
+- The source code for this library is available from the repository above.
+- No local modifications to Symphonia source are tracked in this repository.
+
+Component Name: ringbuf
+Version Number: 0.4.8
+License Type: "MIT OR Apache-2.0"
+Provide License Details:
+- Source repository: https://github.com/agerasev/ringbuf
+- Apache-2.0 license text: https://github.com/agerasev/ringbuf/blob/master/LICENSE-APACHE
+- MIT license text: https://github.com/agerasev/ringbuf/blob/master/LICENSE-MIT
+- Used by: rust_sfx_core
+
+Component Name: CPAL
+Version Number: 0.17.1
+License Type: "Apache-2.0"
+Provide License Details:
+- Source repository: https://github.com/RustAudio/cpal
+- License text: https://github.com/RustAudio/cpal/blob/master/LICENSE
+- Used by: rust_sfx_core on non-Android targets
+
+Component Name: oboe-rs (crate: oboe)
+Version Number: 0.6.1
+License Type: "Apache-2.0"
+Provide License Details:
+- Project page: https://github.com/katyo/oboe-rs
+- Package documentation: https://docs.rs/crate/oboe/latest
+- License declaration: https://raw.githubusercontent.com/katyo/oboe-rs/master/Cargo.toml
+- Used by: rust_sfx_core on Android
+- This component provides Rust bindings to Google's Oboe library.

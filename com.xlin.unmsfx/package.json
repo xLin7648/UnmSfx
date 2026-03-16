@@ -1,0 +1,15 @@
+{
+  "name": "com.xlin.unmsfx",
+  "version": "1.0.0",
+  "displayName": "UnmSfx",
+  "description": "\u4f4e\u5ef6\u8fdf\u97f3\u6548\u53d1\u58f0\u5e93",
+  "keywords": [
+    "tool",
+    "plugin"
+  ],
+  "license": "Apache-2.0",
+  "author": {
+    "name": "xLin",
+    "email": "xLin7648@outlook.com"
+  }
+}
