@@ -3,6 +3,9 @@
 UnmSfx is a low-latency sound effect playback stack composed of a Rust native
 core and a Unity UPM package.
 
+## Please Note
+- Apple device support is currently unknown.
+
 ## Repository Layout
 
 - `unm-sfx/`: Rust source code, public C header, and build notes for the
@@ -18,8 +21,7 @@ core and a Unity UPM package.
 1. Open a terminal in `unm-sfx/`.
 2. Build the native library for the target platform with Cargo, for example:
    `cargo build --release`
-3. For Apple targets, follow the notes in `unm-sfx/docs/apple-build.md`.
-4. Copy the generated outputs into `com.xlin.unmsfx/Runtime/bin/` using the
+3. Copy the generated outputs into `com.xlin.unmsfx/Runtime/bin/` using the
    platform naming expected by the Unity package.
 
 ## Use The Unity Package
