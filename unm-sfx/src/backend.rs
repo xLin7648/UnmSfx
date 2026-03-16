@@ -19,4 +19,6 @@ pub trait AudioBackend {
     fn init_load_sound_from_sources(&mut self, sources: Vec<RawSource>) -> Option<Vec<SfxHandle>>;
 
     fn play(&mut self, handle: SfxHandle);
+
+    fn submit_frame_play_count(&mut self, handle: SfxHandle, count: u16);
 }

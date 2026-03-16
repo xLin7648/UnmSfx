@@ -33,6 +33,9 @@ namespace UnmSfx
         private delegate void PlayDelegate(byte handle);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int SubmitFramePlayCountDelegate(byte handle, ushort count);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int LoadSoundDelegate(
             IntPtr[] dataPtrs,
             UIntPtr[] dataLens,
@@ -58,6 +61,7 @@ namespace UnmSfx
             public TickDelegate Tick;
             public ShutdownDelegate Shutdown;
             public PlayDelegate Play;
+            public SubmitFramePlayCountDelegate SubmitFramePlayCount;
             public LoadSoundDelegate LoadSound;
             public LoadPcmF32Delegate LoadPcmF32;
         }
@@ -89,6 +93,9 @@ namespace UnmSfx
 
         [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
         private static extern void unm_sfx_play(byte handle);
+
+        [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int unm_sfx_submit_frame_play_count(byte handle, ushort count);
 
         [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
         private static extern int unm_sfx_load_sound(
@@ -157,6 +164,10 @@ namespace UnmSfx
                     Tick = LoadFunction<TickDelegate>(module, "unm_sfx_tick"),
                     Shutdown = LoadFunction<ShutdownDelegate>(module, "unm_sfx_shutdown"),
                     Play = LoadFunction<PlayDelegate>(module, "unm_sfx_play"),
+                    SubmitFramePlayCount = LoadFunction<SubmitFramePlayCountDelegate>(
+                        module,
+                        "unm_sfx_submit_frame_play_count"
+                    ),
                     LoadSound = LoadFunction<LoadSoundDelegate>(module, "unm_sfx_load_sound"),
                     LoadPcmF32 = LoadFunction<LoadPcmF32Delegate>(module, "unm_sfx_load_pcm_f32"),
                 };
@@ -351,6 +362,21 @@ namespace UnmSfx
 #endif
         }
 
+        private static int NativeSubmitFramePlayCount(byte handle, ushort count)
+        {
+#if UNITY_EDITOR_WIN
+            NativeApi api = GetApiOrNull();
+            if (api == null)
+            {
+                return -1;
+            }
+
+            return api.SubmitFramePlayCount(handle, count);
+#else
+            return unm_sfx_submit_frame_play_count(handle, count);
+#endif
+        }
+
         private static int NativeLoadSound(
             IntPtr[] dataPtrs,
             UIntPtr[] dataLens,
@@ -414,6 +440,16 @@ namespace UnmSfx
             {
                 NativePlay(handle.Raw);
             }
+        }
+
+        public static int SubmitFramePlayCount(SfxHandle handle, ushort count)
+        {
+            if (!handle.IsValid || count == 0)
+            {
+                return 0;
+            }
+
+            return NativeSubmitFramePlayCount(handle.Raw, count);
         }
 
         public static SfxHandle[] LoadSounds(IReadOnlyList<byte[]> clipDataList)

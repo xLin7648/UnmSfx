@@ -19,29 +19,56 @@ use crate::{
     clip::{SfxHandle, MAX_SOUND_COUNT},
     decoder,
     mixer::Mixer,
-    player::PLAY_QUEUE_CAPACITY,
+    player::{PlayCommand, COMMAND_QUEUE_CAPACITY},
 };
 
 struct OboeCallback {
-    consumer: ringbuf::HeapCons<SfxHandle>,
+    consumer: ringbuf::HeapCons<PlayCommand>,
     mixer: Mixer,
     atlas: SoundAtlas,
-    pending_handles: [SfxHandle; PLAY_QUEUE_CAPACITY],
+    pending_commands: [PlayCommand; COMMAND_QUEUE_CAPACITY],
     device_lost: Arc<AtomicBool>,
+    loaded_sound_count: usize,
 }
 
 impl OboeCallback {
     fn new(
-        consumer: ringbuf::HeapCons<SfxHandle>,
+        consumer: ringbuf::HeapCons<PlayCommand>,
         atlas: SoundAtlas,
         device_lost: Arc<AtomicBool>,
+        loaded_sound_count: usize,
     ) -> Self {
         Self {
             consumer,
             mixer: Mixer::new(),
             atlas,
-            pending_handles: [SfxHandle::default(); PLAY_QUEUE_CAPACITY],
+            pending_commands: [PlayCommand::default(); COMMAND_QUEUE_CAPACITY],
             device_lost,
+            loaded_sound_count,
+        }
+    }
+
+    #[inline(always)]
+    fn enqueue_single(&mut self, handle: SfxHandle) {
+        if !handle.is_valid_for_len(self.loaded_sound_count) {
+            return;
+        }
+
+        let clip = unsafe { self.atlas.clip_unchecked(handle) };
+        let _ = self.mixer.add_sound(clip);
+    }
+
+    #[inline(always)]
+    fn enqueue_repeat(&mut self, handle: SfxHandle, count: u16) {
+        if count == 0 || !handle.is_valid_for_len(self.loaded_sound_count) {
+            return;
+        }
+
+        let clip = unsafe { self.atlas.clip_unchecked(handle) };
+        for _ in 0..count {
+            if !self.mixer.add_sound(clip) {
+                break;
+            }
         }
     }
 }
@@ -59,14 +86,18 @@ impl AudioOutputCallback for OboeCallback {
         };
 
         loop {
-            let queued = self.consumer.pop_slice(&mut self.pending_handles);
+            let queued = self.consumer.pop_slice(&mut self.pending_commands);
             if queued == 0 {
                 break;
             }
 
-            for &handle in &self.pending_handles[..queued] {
-                let clip = unsafe { self.atlas.clip_unchecked(handle) };
-                let _ = self.mixer.add_sound(clip);
+            for idx in 0..queued {
+                let command = self.pending_commands[idx];
+                match command {
+                    PlayCommand::None => {}
+                    PlayCommand::Single(handle) => self.enqueue_single(handle),
+                    PlayCommand::Repeat { handle, count } => self.enqueue_repeat(handle, count),
+                }
             }
         }
 
@@ -84,8 +115,8 @@ impl AudioOutputCallback for OboeCallback {
 }
 
 pub struct Player {
-    producer: ringbuf::HeapProd<SfxHandle>,
-    consumer: Option<ringbuf::HeapCons<SfxHandle>>,
+    producer: ringbuf::HeapProd<PlayCommand>,
+    consumer: Option<ringbuf::HeapCons<PlayCommand>>,
     stream: Option<AudioStreamAsync<Output, OboeCallback>>,
     device_sample_rate: u32,
     cached_sources: Option<Vec<RawSource>>,
@@ -106,8 +137,8 @@ impl Player {
         }
     }
 
-    fn new_queue() -> (ringbuf::HeapProd<SfxHandle>, ringbuf::HeapCons<SfxHandle>) {
-        HeapRb::<SfxHandle>::new(PLAY_QUEUE_CAPACITY).split()
+    fn new_queue() -> (ringbuf::HeapProd<PlayCommand>, ringbuf::HeapCons<PlayCommand>) {
+        HeapRb::<PlayCommand>::new(COMMAND_QUEUE_CAPACITY).split()
     }
 
     fn reset_queue(&mut self) {
@@ -200,6 +231,7 @@ impl AudioBackend for Player {
             consumer,
             atlas,
             Arc::clone(&self.device_lost),
+            self.loaded_sound_count(),
         );
 
         self.device_lost.store(false, Ordering::Release);
@@ -240,6 +272,16 @@ impl AudioBackend for Player {
             return;
         }
 
-        let _ = self.producer.try_push(handle);
+        let _ = self.producer.try_push(PlayCommand::Single(handle));
+    }
+
+    fn submit_frame_play_count(&mut self, handle: SfxHandle, count: u16) {
+        if count == 0 || !handle.is_valid_for_len(self.loaded_sound_count()) {
+            return;
+        }
+
+        let _ = self
+            .producer
+            .try_push(PlayCommand::Repeat { handle, count });
     }
 }

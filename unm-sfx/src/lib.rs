@@ -193,6 +193,23 @@ pub extern "C" fn unm_sfx_play(handle: u8) {
 }
 
 #[no_mangle]
+pub extern "C" fn unm_sfx_submit_frame_play_count(handle: u8, count: u16) -> i32 {
+    if count == 0 {
+        return 0;
+    }
+
+    unsafe {
+        let manager = match manager_mut().as_mut() {
+            Some(manager) => manager,
+            None => return ERR_MANAGER_NOT_INIT,
+        };
+        manager.submit_frame_play_count(SfxHandle(handle), count);
+    }
+
+    0
+}
+
+#[no_mangle]
 pub extern "C" fn unm_sfx_shutdown() {
     unsafe {
         let manager = manager_mut();

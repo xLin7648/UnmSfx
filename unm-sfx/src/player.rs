@@ -4,7 +4,15 @@ use crate::{
     clip::{SfxHandle, MAX_SOUND_COUNT},
 };
 
-pub(crate) const PLAY_QUEUE_CAPACITY: usize = 256;
+pub(crate) const COMMAND_QUEUE_CAPACITY: usize = 256;
+
+#[derive(Clone, Copy, Default)]
+pub(crate) enum PlayCommand {
+    #[default]
+    None,
+    Single(SfxHandle),
+    Repeat { handle: SfxHandle, count: u16 },
+}
 
 pub struct SfxManager(Box<dyn AudioBackend>);
 
@@ -50,5 +58,9 @@ impl SfxManager {
 
     pub fn play(&mut self, handle: SfxHandle) {
         self.0.play(handle);
+    }
+
+    pub fn submit_frame_play_count(&mut self, handle: SfxHandle, count: u16) {
+        self.0.submit_frame_play_count(handle, count);
     }
 }

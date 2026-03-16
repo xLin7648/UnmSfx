@@ -26,10 +26,14 @@ public sealed class UnmSfxExample : MonoBehaviour
 
     private void Start()
     {
-        var handles = UnmSfxManager.Instance.LoadFromAudioClips(new[] { clip });
+        var handles = UnmSfxManager.Ins.LoadFromAudioClips(new[] { clip });
         if (handles.Length > 0)
         {
-            UnmSfxManager.Instance.Play(handles[0]);
+            // Realtime trigger.
+            UnmSfxManager.Ins.Play(handles[0]);
+
+            // Frame-aligned trigger (submitted in LateUpdate).
+            UnmSfxManager.Ins.PlayFrameAligned(handles[0], 2);
         }
     }
 }
