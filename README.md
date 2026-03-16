@@ -4,7 +4,7 @@ UnmSfx is a low-latency sound effect playback stack composed of a Rust native
 core and a Unity UPM package.
 
 ## Please Note
-- Apple device support is currently unknown.
+- Compatibility with Apple devices (iOS/macOS) has not been tested yet.
 
 ## Repository Layout
 
